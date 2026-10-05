@@ -9,6 +9,7 @@ import type { Survey } from '../types/survey'
 import type { Measure } from '../types/measure'
 import type { Support } from '../types/support'
 import type { Review } from '../types/review'
+import type { WorkOrder } from '../types/workOrder'
 
 const SEED_TIME = '2026-01-08T01:30:00.000Z'
 
@@ -90,6 +91,120 @@ export async function seedDatabase(): Promise<void> {
     wrap<Measure>({ id: 'measure-b3', treeId: SEED_IDS.treeB, type: '透气', date: '2026-06-10', material: '通气管 6 根', operator: '孙晓', state: '计划' }),
     wrap<Measure>({ id: 'measure-c1', treeId: SEED_IDS.treeC, type: '树洞修补', date: '2026-04-11', material: '不锈钢网 + 防腐树脂', operator: '周敏', state: '已完成' }),
     wrap<Measure>({ id: 'measure-c2', treeId: SEED_IDS.treeC, type: '病虫害防治', date: '2026-05-06', material: '生物制剂 2 次施药', operator: '周敏', state: '计划' }),
+    // 负责人不在班组归属表内，升级回填时标成「历史无派工」
+    wrap<Measure>({ id: 'measure-a4', treeId: SEED_IDS.treeA, type: '病虫害防治', date: '2026-06-15', material: '生物制剂 1 次施药', operator: '冯刚', state: '计划' }),
+  ]
+
+  // ---------------- 作业单（养护班组侧，覆盖已交 / 退回 / 失败 / 历史无派工） ----------------
+  const workOrders: WorkOrder[] = [
+    wrap<WorkOrder>({
+      id: 'workorder-a1',
+      dispatchNo: 'PG-2026-001',
+      measureId: 'measure-a1',
+      type: '换土',
+      attendance: 3,
+      materialUsage: '基质土 6 m³ + 草炭土 2 m³',
+      receiptState: '已交',
+      submitState: '成功',
+      source: '正常派工',
+      team: '养护一班',
+    }),
+    wrap<WorkOrder>({
+      id: 'workorder-a2',
+      dispatchNo: 'PG-2026-002',
+      measureId: 'measure-a2',
+      type: '树洞修补',
+      attendance: 2,
+      materialUsage: '防腐树脂 + 木栓填充',
+      receiptState: '已交',
+      submitState: '成功',
+      source: '正常派工',
+      team: '养护一班',
+    }),
+    wrap<WorkOrder>({
+      id: 'workorder-a3',
+      dispatchNo: 'PG-2026-003',
+      measureId: 'measure-a3',
+      type: '透气',
+      attendance: 2,
+      materialUsage: '透气砖 10 块 + 通气管 4 根',
+      receiptState: '退回',
+      submitState: '成功',
+      source: '正常派工',
+      team: '养护二班',
+    }),
+    wrap<WorkOrder>({
+      id: 'workorder-a4',
+      dispatchNo: '历史无派工',
+      measureId: 'measure-a4',
+      type: '病虫害防治',
+      attendance: 0,
+      materialUsage: '',
+      receiptState: '未交',
+      submitState: '成功',
+      source: '历史补录',
+      team: '历史无派工',
+    }),
+    wrap<WorkOrder>({
+      id: 'workorder-b1',
+      dispatchNo: 'PG-2026-004',
+      measureId: 'measure-b1',
+      type: '换土',
+      attendance: 4,
+      materialUsage: '腐叶土 5 m³ + 河沙 1 m³',
+      receiptState: '已交',
+      submitState: '成功',
+      source: '正常派工',
+      team: '养护二班',
+    }),
+    wrap<WorkOrder>({
+      id: 'workorder-b2',
+      dispatchNo: 'PG-2026-005',
+      measureId: 'measure-b2',
+      type: '施肥',
+      attendance: 2,
+      materialUsage: '有机肥 80 kg + 复合肥 15 kg',
+      receiptState: '已交',
+      submitState: '成功',
+      source: '正常派工',
+      team: '养护二班',
+    }),
+    wrap<WorkOrder>({
+      id: 'workorder-b3',
+      dispatchNo: 'PG-2026-006',
+      measureId: 'measure-b3',
+      type: '透气',
+      attendance: 0,
+      materialUsage: '',
+      receiptState: '未交',
+      submitState: '失败',
+      source: '正常派工',
+      team: '养护三班',
+    }),
+    wrap<WorkOrder>({
+      id: 'workorder-c1',
+      dispatchNo: 'PG-2026-007',
+      measureId: 'measure-c1',
+      type: '树洞修补',
+      attendance: 3,
+      materialUsage: '不锈钢网 + 防腐树脂',
+      receiptState: '已交',
+      submitState: '成功',
+      source: '正常派工',
+      team: '养护三班',
+    }),
+    wrap<WorkOrder>({
+      id: 'workorder-c2',
+      dispatchNo: 'PG-2026-008',
+      measureId: 'measure-c2',
+      type: '病虫害防治',
+      attendance: 0,
+      materialUsage: '',
+      receiptState: '未交',
+      submitState: '成功',
+      source: '正常派工',
+      team: '养护三班',
+    }),
   ]
 
   // ---------------- 加固件（含超周期未检查的样本） ----------------
@@ -112,11 +227,16 @@ export async function seedDatabase(): Promise<void> {
     wrap<Review>({ id: 'review-c3', treeId: SEED_IDS.treeC, date: '2026-07-20', vigor: '衰弱', trend: '好转', conclusion: '排水改造后积水缓解，新梢萌发量回升。', followUp: '继续按季度监测倾斜度与空洞变化，年度复壮计划中保留透气措施。' }),
   ]
 
-  await db.transaction('rw', db.trees, db.surveys, db.measures, db.supports, db.reviews, async () => {
-    await db.trees.bulkPut(trees)
-    await db.surveys.bulkPut(surveys)
-    await db.measures.bulkPut(measures)
-    await db.supports.bulkPut(supports)
-    await db.reviews.bulkPut(reviews)
-  })
+  await db.transaction(
+    'rw',
+    [db.trees, db.surveys, db.measures, db.supports, db.reviews, db.workOrders],
+    async () => {
+      await db.trees.bulkPut(trees)
+      await db.surveys.bulkPut(surveys)
+      await db.measures.bulkPut(measures)
+      await db.supports.bulkPut(supports)
+      await db.reviews.bulkPut(reviews)
+      await db.workOrders.bulkPut(workOrders)
+    },
+  )
 }

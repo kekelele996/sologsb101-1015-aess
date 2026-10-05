@@ -6,6 +6,7 @@
  * 消费模型：Measure、Tree；复用组件：<FilterBar>、<EmptyPanel>、<StatBadge>
  */
 import { computed, onMounted, reactive, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import EmptyPanel from '@/components/common/EmptyPanel.vue'
 import FilterBar from '@/components/common/FilterBar.vue'
@@ -13,7 +14,9 @@ import StatBadge from '@/components/common/StatBadge.vue'
 import { useIdbTable } from '@/hooks/useIdbTable'
 import { useMeasureStore } from '@/stores/measureStore'
 import { useTreeStore } from '@/stores/treeStore'
+import { useWorkOrderStore } from '@/stores/workOrderStore'
 import { db } from '@/utils/db'
+import { ROUTES } from '@/router'
 import {
   MEASURE_STATE_OPTIONS,
   MEASURE_TYPE_OPTIONS,
@@ -23,8 +26,10 @@ import {
   type MeasureType,
 } from '@/types/measure'
 
+const router = useRouter()
 const treeStore = useTreeStore()
 const measureStore = useMeasureStore()
+const workOrderStore = useWorkOrderStore()
 
 const { rows, loading } = useIdbTable<Measure>(db.measures, { sortByUpdatedAt: false })
 
@@ -79,9 +84,15 @@ const stats = computed(() => {
   return { total, done, pending, donePct: total === 0 ? 0 : Math.round((done / total) * 1000) / 10 }
 })
 
+/** 措施关联的作业单（档案室侧只读查看班组回执状态） */
+function workOrderOf(measureId: string) {
+  return workOrderStore.workOrders.find((wo) => wo.measureId === measureId) ?? null
+}
+
 onMounted(() => {
   void treeStore.loadAll()
   void measureStore.init()
+  void workOrderStore.init()
 })
 
 function openCreate(): void {
@@ -193,7 +204,7 @@ function handleFilterChange(key: string, value: string): void {
     <el-card shadow="never">
       <template #header>
         <div class="card-header">
-          <span class="card-header__title">复壮措施台账</span>
+          <span class="card-header__title">复壮措施台账（档案室）</span>
           <el-button type="primary" @click="openCreate" :disabled="treeStore.trees.length === 0">
             <el-icon><Plus /></el-icon>
             <span>新增复壮措施</span>
@@ -296,7 +307,7 @@ function handleFilterChange(key: string, value: string): void {
             <span v-else>{{ row.date }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="材料" min-width="220">
+        <el-table-column label="档案室登记材料" min-width="220">
           <template #default="{ row }">
             <el-input
               v-if="measureStore.hasDraft(row.id)"
@@ -326,6 +337,28 @@ function handleFilterChange(key: string, value: string): void {
             >
               {{ row.state }}
             </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="作业单回执" width="130">
+          <template #default="{ row }">
+            <template v-if="workOrderOf(row.id)">
+              <el-tag
+                :type="
+                  workOrderOf(row.id)?.receiptState === '已交'
+                    ? 'success'
+                    : workOrderOf(row.id)?.receiptState === '退回'
+                      ? 'warning'
+                      : 'info'
+                "
+                effect="plain"
+              >
+                {{ workOrderOf(row.id)?.receiptState }}
+              </el-tag>
+              <div v-if="workOrderOf(row.id)?.submitState === '失败'" class="cell-sub fail">提交失败</div>
+            </template>
+            <el-button v-else link type="primary" size="small" @click="router.push(ROUTES.workorders)">
+              去开作业单
+            </el-button>
           </template>
         </el-table-column>
         <el-table-column label="草稿" width="150">
@@ -411,7 +444,7 @@ function handleFilterChange(key: string, value: string): void {
           type="info"
           show-icon
           :closable="false"
-          title="状态选择「已完成」时，会自动把该古树的最近复壮日期回写为上面的实施日期，并进入复评待办。"
+          title="档案室负责登记实施日期、负责人与措施状态；班组交完工回执后才动措施状态，材料用量以本室登记为准。"
         />
       </el-form>
       <template #footer>
@@ -466,5 +499,9 @@ function handleFilterChange(key: string, value: string): void {
 .cell-sub {
   font-size: 12px;
   color: #8c8479;
+}
+
+.cell-sub.fail {
+  color: #f56c6c;
 }
 </style>

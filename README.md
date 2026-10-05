@@ -69,13 +69,13 @@ sologsb101-1015/
         ├── App.vue             # 外壳：顶部导航 + 当前古树上下文 + 页脚
         ├── env.d.ts
         ├── styles/main.css
-        ├── types/              # tree.ts survey.ts measure.ts support.ts review.ts
-        ├── stores/             # treeStore.ts measureStore.ts reviewStore.ts
+        ├── types/              # tree.ts survey.ts measure.ts workOrder.ts support.ts review.ts
+        ├── stores/             # treeStore.ts measureStore.ts workOrderStore.ts reviewStore.ts
         ├── components/common/  # VigorTag.vue FilterBar.vue StatBadge.vue EmptyPanel.vue
         ├── hooks/              # useTreeHistory.ts useIdbTable.ts
-        ├── pages/              # 5 个模块页面
+        ├── pages/              # 6 个模块页面
         ├── router/index.ts     # 路由表 + ROUTES 常量
-        └── utils/              # dimension.ts db.ts export.ts seed.ts id.ts
+        └── utils/              # dimension.ts db.ts export.ts seed.ts id.ts team.ts
 ```
 
 ---
@@ -86,7 +86,8 @@ sologsb101-1015/
 | --- | --- | --- |
 | `/trees` | `pages/TreeList.vue` | 古树一树一档：新建/编辑/级联删除、按保护级别与树种筛选、回显检查次数与最新长势等级 |
 | `/trees/:id/surveys` | `pages/TreeSurvey.vue` | 树体与立地检查：录树高/胸径/冠幅/倾斜/空洞并对比上次、年化生长量、古树历史时间线 |
-| `/measures` | `pages/MeasureBoard.vue` | 复壮措施台账：按类型与实施状态筛选、行内草稿、批量改状态，完成即回写最近复壮日期 |
+| `/measures` | `pages/MeasureBoard.vue` | 复壮措施台账（档案室）：按类型与实施状态筛选、行内草稿、批量改状态，完成即回写最近复壮日期 |
+| `/workorders` | `pages/WorkOrderBoard.vue` | 养护班组作业单：开立派工、录出勤人次与领用材料用量、提交完工回执，按措施类型与档案室对账 |
 | `/supports` | `pages/SupportBoard.vue` | 支撑加固与避雷件登记：超周期未检查自动高亮 + 顶部提醒 + 一键登记本次检查 |
 | `/reviews` | `pages/ReviewView.vue` | 长势复评与结构版本：衰弱/濒危强制填写后续措施、历史时间线、JSON 导入导出 |
 
@@ -100,12 +101,13 @@ sologsb101-1015/
 
 * **持久化方案**：IndexedDB，通过 Dexie 封装（`src/utils/db.ts`）。
 * **数据库名**：`gbheritagetree`。
-* **数据结构版本**：`DB_SCHEMA_VERSION = 2`，`version(1)` 建立全部表，`version(2)` 补齐索引并执行 `.upgrade()` 迁移：
+* **数据结构版本**：`DB_SCHEMA_VERSION = 3`，`version(1)` 建立全部表，`version(2)` 补齐索引并执行 `.upgrade()` 迁移，`version(3)` 新增作业单表并回填历史派工来源：
   * `surveys` 增加 `[treeId+date]` 复合索引、`measures` 增加 `operator` 索引、`supports` 增加 `lastCheckDate` 索引、`reviews` 增加 `trend` 索引；
   * 回填 `revision` / `createdAt` / `updatedAt`；
   * 为 `trees` 补齐 `lastMeasureDate`（最近复壮日期）回写字段；
   * 为 `reviews` 补齐 `followUp`（后续措施）字段；
-  * 为 `supports` 补齐 `lastCheckDate` 与 `checkCycleMon` 缺省值。
+  * 为 `supports` 补齐 `lastCheckDate` 与 `checkCycleMon` 缺省值；
+  * **v3**：新增 `workOrders` 表（`measureId, type, receiptState, submitState, source, team` 索引），并为每条历史复壮措施补一条作业单——按负责人班组归属补来源，认不出归属的标成「历史无派工」。
 * **表结构**：
 
   | 表 | 主键 | 主要索引 |
@@ -113,6 +115,7 @@ sologsb101-1015/
   | `trees` | id | code, species, protectLevel, ageYears, createdAt, updatedAt, owner |
   | `surveys` | id | treeId, [treeId+date], date, siteNote |
   | `measures` | id | treeId, type, state, date, operator |
+  | `workOrders` | id | measureId, type, receiptState, submitState, source, team |
   | `supports` | id | treeId, type, installDate, lastCheckDate |
   | `reviews` | id | treeId, date, vigor, trend |
 
@@ -155,3 +158,8 @@ npm run preview      # 预览 dist 产物
   「登记本次检查」会把最近检查日期置为今天并解除高亮。
 * **复评强制校验**：长势为「衰弱」或「濒危」时，后续措施为必填项，未填写无法保存。
 * **措施回写**：复壮措施状态改为「已完成」时，若实施日期晚于古树现有最近复壮日期，则自动回写该日期。
+* **两摊分账**：养护班组管作业单（派工号、出勤人次、领用材料用量），档案室管复壮措施（实施日期、负责人、措施状态）。
+  * 班组交完工回执后才动措施状态；材料用量对不上以档案室登记为准，回执退回班组重填。
+  * 两边按措施类型对账；班组提交失败后只重试班组这一侧，档案室照旧。
+  * 档案室先标成已完成的措施，晚到回执也不退回去。
+  * 旧数据没记派工号，升级时按负责人班组归属补来源，认不出归属的标成「历史无派工」。

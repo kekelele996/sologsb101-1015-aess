@@ -11,14 +11,16 @@ import type { Survey } from '../types/survey'
 import type { Measure, MeasureState } from '../types/measure'
 import type { Support } from '../types/support'
 import type { Review } from '../types/review'
-import { nowIso, today } from './id'
+import type { WorkOrder } from '../types/workOrder'
+import { nowIso, today, uuid } from './id'
+import { historyDispatchNo, teamOfOperator } from './team'
 import { seedDatabase } from './seed'
 
 /** 数据库名 */
 export const DB_NAME = 'gbheritagetree'
 
 /** 当前数据结构版本号（每次调整字段结构必须 +1 并补迁移） */
-export const DB_SCHEMA_VERSION = 2
+export const DB_SCHEMA_VERSION = 3
 
 /** 数据行结构修订号 */
 export const ROW_REVISION = 2
@@ -29,6 +31,7 @@ class HeritageTreeDatabase extends Dexie {
   measures!: Table<Measure, string>
   supports!: Table<Support, string>
   reviews!: Table<Review, string>
+  workOrders!: Table<WorkOrder, string>
 
   constructor() {
     super(DB_NAME)
@@ -43,7 +46,7 @@ class HeritageTreeDatabase extends Dexie {
     })
 
     // ---------- v2：补齐索引与回写字段，并迁移历史数据 ----------
-    this.version(DB_SCHEMA_VERSION)
+    this.version(2)
       .stores({
         trees: 'id, code, species, protectLevel, ageYears, createdAt, updatedAt, owner',
         // 复合索引 [treeId+date]：按古树 + 日期快速取检查记录
@@ -81,6 +84,42 @@ class HeritageTreeDatabase extends Dexie {
           if (typeof row.lastCheckDate !== 'string') row.lastCheckDate = ''
           if (typeof row.checkCycleMon !== 'number') row.checkCycleMon = 12
         })
+      })
+
+    // ---------- v3：作业单与复壮措施分账，回填历史派工来源 ----------
+    this.version(3)
+      .stores({
+        trees: 'id, code, species, protectLevel, ageYears, createdAt, updatedAt, owner',
+        surveys: 'id, treeId, [treeId+date], date, siteNote',
+        measures: 'id, treeId, type, state, date, operator',
+        supports: 'id, treeId, type, installDate, lastCheckDate',
+        reviews: 'id, treeId, date, vigor, trend',
+        // 作业单：按关联措施、类型、回执/提交状态索引，便于按类型对账
+        workOrders: 'id, measureId, type, receiptState, submitState, source, team',
+      })
+      .upgrade(async (tx) => {
+        // 为每条历史复壮措施补一条作业单：按负责人班组归属补来源，认不出的标「历史无派工」
+        const measureRows = await tx.table('measures').toArray()
+        const stamp = nowIso()
+        for (const m of measureRows as Measure[]) {
+          const team = teamOfOperator(m.operator)
+          const row: WorkOrder = {
+            id: uuid('workorder'),
+            dispatchNo: historyDispatchNo(m.id, m.operator),
+            measureId: m.id,
+            type: m.type,
+            attendance: 0,
+            materialUsage: '',
+            receiptState: '未交',
+            submitState: '成功',
+            source: '历史补录',
+            team,
+            createdAt: stamp,
+            updatedAt: stamp,
+            revision: ROW_REVISION,
+          }
+          await tx.table('workOrders').put(row)
+        }
       })
   }
 }
@@ -123,15 +162,24 @@ export async function putTree(row: Tree): Promise<void> {
   await db.trees.put({ ...row, updatedAt: nowIso(), revision: ROW_REVISION })
 }
 
-/** 删除古树并级联清理其检查、措施、加固与复评记录 */
+/** 删除古树并级联清理其检查、措施、加固、复评与作业单记录 */
 export async function removeTree(id: string): Promise<void> {
-  await db.transaction('rw', db.trees, db.surveys, db.measures, db.supports, db.reviews, async () => {
-    await db.surveys.where('treeId').equals(id).delete()
-    await db.measures.where('treeId').equals(id).delete()
-    await db.supports.where('treeId').equals(id).delete()
-    await db.reviews.where('treeId').equals(id).delete()
-    await db.trees.delete(id)
-  })
+  await db.transaction(
+    'rw',
+    [db.trees, db.surveys, db.measures, db.supports, db.reviews, db.workOrders],
+    async () => {
+      // 先查出该树下措施 id，再删作业单（作业单通过关联措施间接归属古树）
+      const measureIds = await db.measures.where('treeId').equals(id).primaryKeys()
+      await db.surveys.where('treeId').equals(id).delete()
+      await db.measures.where('treeId').equals(id).delete()
+      await db.supports.where('treeId').equals(id).delete()
+      await db.reviews.where('treeId').equals(id).delete()
+      if (measureIds.length > 0) {
+        await db.workOrders.where('measureId').anyOf(measureIds).delete()
+      }
+      await db.trees.delete(id)
+    },
+  )
 }
 
 /* ------------------------------ 树体检查 ------------------------------ */
@@ -196,6 +244,25 @@ export async function batchSetMeasureState(ids: string[], state: MeasureState): 
   return list.length
 }
 
+/* ------------------------------ 作业单 ------------------------------ */
+
+export async function listWorkOrders(): Promise<WorkOrder[]> {
+  const rows = await db.workOrders.toArray()
+  return rows.sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+}
+
+export async function listWorkOrdersByMeasure(measureId: string): Promise<WorkOrder[]> {
+  return db.workOrders.where('measureId').equals(measureId).toArray()
+}
+
+export async function putWorkOrder(row: WorkOrder): Promise<void> {
+  await db.workOrders.put({ ...row, updatedAt: nowIso(), revision: ROW_REVISION })
+}
+
+export async function removeWorkOrder(id: string): Promise<void> {
+  await db.workOrders.delete(id)
+}
+
 /* ------------------------------ 加固件 ------------------------------ */
 
 export async function listSupports(): Promise<Support[]> {
@@ -251,60 +318,84 @@ export interface DatabaseSnapshot {
   measures: Measure[]
   supports: Support[]
   reviews: Review[]
+  workOrders: WorkOrder[]
 }
 
 /** 导出整库快照 */
 export async function exportSnapshot(): Promise<DatabaseSnapshot> {
-  const [trees, surveys, measures, supports, reviews] = await Promise.all([
+  const [trees, surveys, measures, supports, reviews, workOrders] = await Promise.all([
     db.trees.toArray(),
     db.surveys.toArray(),
     db.measures.toArray(),
     db.supports.toArray(),
     db.reviews.toArray(),
+    db.workOrders.toArray(),
   ])
-  return { name: DB_NAME, schemaVersion: DB_SCHEMA_VERSION, exportedAt: nowIso(), trees, surveys, measures, supports, reviews }
+  return {
+    name: DB_NAME,
+    schemaVersion: DB_SCHEMA_VERSION,
+    exportedAt: nowIso(),
+    trees,
+    surveys,
+    measures,
+    supports,
+    reviews,
+    workOrders,
+  }
 }
 
 /** 用快照覆盖整库（导入存档） */
 export async function importSnapshot(snapshot: DatabaseSnapshot): Promise<void> {
-  await db.transaction('rw', db.trees, db.surveys, db.measures, db.supports, db.reviews, async () => {
-    await Promise.all([
-      db.trees.clear(),
-      db.surveys.clear(),
-      db.measures.clear(),
-      db.supports.clear(),
-      db.reviews.clear(),
-    ])
-    await db.trees.bulkPut(snapshot.trees.map((row) => ({ ...row, revision: ROW_REVISION })))
-    await db.surveys.bulkPut(snapshot.surveys.map((row) => ({ ...row, revision: ROW_REVISION })))
-    await db.measures.bulkPut(snapshot.measures.map((row) => ({ ...row, revision: ROW_REVISION })))
-    await db.supports.bulkPut(snapshot.supports.map((row) => ({ ...row, revision: ROW_REVISION })))
-    await db.reviews.bulkPut(snapshot.reviews.map((row) => ({ ...row, revision: ROW_REVISION })))
-  })
+  await db.transaction(
+    'rw',
+    [db.trees, db.surveys, db.measures, db.supports, db.reviews, db.workOrders],
+    async () => {
+      await Promise.all([
+        db.trees.clear(),
+        db.surveys.clear(),
+        db.measures.clear(),
+        db.supports.clear(),
+        db.reviews.clear(),
+        db.workOrders.clear(),
+      ])
+      await db.trees.bulkPut(snapshot.trees.map((row) => ({ ...row, revision: ROW_REVISION })))
+      await db.surveys.bulkPut(snapshot.surveys.map((row) => ({ ...row, revision: ROW_REVISION })))
+      await db.measures.bulkPut(snapshot.measures.map((row) => ({ ...row, revision: ROW_REVISION })))
+      await db.supports.bulkPut(snapshot.supports.map((row) => ({ ...row, revision: ROW_REVISION })))
+      await db.reviews.bulkPut(snapshot.reviews.map((row) => ({ ...row, revision: ROW_REVISION })))
+      await db.workOrders.bulkPut((snapshot.workOrders ?? []).map((row) => ({ ...row, revision: ROW_REVISION })))
+    },
+  )
 }
 
 /** 清空全部数据并重新灌入演示数据 */
 export async function resetDatabase(): Promise<void> {
-  await db.transaction('rw', db.trees, db.surveys, db.measures, db.supports, db.reviews, async () => {
-    await Promise.all([
-      db.trees.clear(),
-      db.surveys.clear(),
-      db.measures.clear(),
-      db.supports.clear(),
-      db.reviews.clear(),
-    ])
-  })
+  await db.transaction(
+    'rw',
+    [db.trees, db.surveys, db.measures, db.supports, db.reviews, db.workOrders],
+    async () => {
+      await Promise.all([
+        db.trees.clear(),
+        db.surveys.clear(),
+        db.measures.clear(),
+        db.supports.clear(),
+        db.reviews.clear(),
+        db.workOrders.clear(),
+      ])
+    },
+  )
   await seedDatabase()
 }
 
 /** 各表行数统计 */
 export async function countAll(): Promise<Record<string, number>> {
-  const [trees, surveys, measures, supports, reviews] = await Promise.all([
+  const [trees, surveys, measures, supports, reviews, workOrders] = await Promise.all([
     db.trees.count(),
     db.surveys.count(),
     db.measures.count(),
     db.supports.count(),
     db.reviews.count(),
+    db.workOrders.count(),
   ])
-  return { trees, surveys, measures, supports, reviews }
+  return { trees, surveys, measures, supports, reviews, workOrders }
 }
