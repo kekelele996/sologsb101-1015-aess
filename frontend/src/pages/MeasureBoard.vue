@@ -1,18 +1,20 @@
 <script setup lang="ts">
 /**
- * /measures 复壮措施台账
- * 新增 / 编辑 / 删除措施，按类型与实施状态筛选，支持行内草稿与批量改状态；
- * 状态改为「已完成」时回写古树最近复壮日期。
- * 消费模型：Measure、Tree；复用组件：<FilterBar>、<EmptyPanel>、<StatBadge>
+ * /measures 复壮措施台账（档案室这一摊）
+ * 档案室记实施日期、负责人与措施状态；班组交完工回执后才动措施状态（进入「已完成」），
+ * 材料用量以档案室登记为准；与班组作业单按措施类型对账。
+ * 消费模型：Measure、WorkOrder（回执）、Tree；复用组件：<FilterBar>、<EmptyPanel>、<StatBadge>、<ReconcilePanel>
  */
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import EmptyPanel from '@/components/common/EmptyPanel.vue'
 import FilterBar from '@/components/common/FilterBar.vue'
+import ReconcilePanel from '@/components/common/ReconcilePanel.vue'
 import StatBadge from '@/components/common/StatBadge.vue'
 import { useIdbTable } from '@/hooks/useIdbTable'
 import { useMeasureStore } from '@/stores/measureStore'
 import { useTreeStore } from '@/stores/treeStore'
+import { useWorkOrderStore } from '@/stores/workOrderStore'
 import { db } from '@/utils/db'
 import {
   MEASURE_STATE_OPTIONS,
@@ -22,9 +24,11 @@ import {
   type MeasureState,
   type MeasureType,
 } from '@/types/measure'
+import { LEGACY_NO_DISPATCH } from '@/types/workorder'
 
 const treeStore = useTreeStore()
 const measureStore = useMeasureStore()
+const workOrderStore = useWorkOrderStore()
 
 const { rows, loading } = useIdbTable<Measure>(db.measures, { sortByUpdatedAt: false })
 
@@ -82,7 +86,13 @@ const stats = computed(() => {
 onMounted(() => {
   void treeStore.loadAll()
   void measureStore.init()
+  void workOrderStore.init()
 })
+
+/** 班组是否已交完工回执（同树同类型、已交未归档）：档案室动「已完成」前必须满足 */
+function hasReceipt(row: Measure): boolean {
+  return workOrderStore.hasOpenReceipt(row.treeId, row.type)
+}
 
 function openCreate(): void {
   const treeId =
@@ -152,7 +162,7 @@ async function handleDelete(row: Measure): Promise<void> {
 async function handleAdvance(row: Measure): Promise<void> {
   const next = await measureStore.advance(row.id)
   if (next === null) {
-    ElMessage.info('该措施已处于「已完成」状态')
+    ElMessage.warning(measureStore.lastMessage || '该措施已处于「已完成」状态')
     return
   }
   ElMessage.success(`状态已推进为「${next}」`)
@@ -163,8 +173,8 @@ async function handleBatchState(): Promise<void> {
     ElMessage.info('请先在列表中勾选需要调整的措施')
     return
   }
-  const count = await measureStore.batchSetState(measureStore.stateDraft)
-  ElMessage.success(`已把 ${count} 条措施状态改为「${measureStore.stateDraft}」`)
+  await measureStore.batchSetState(measureStore.stateDraft)
+  ElMessage.success(measureStore.lastMessage)
 }
 
 function handleFilterChange(key: string, value: string): void {
@@ -190,10 +200,12 @@ function handleFilterChange(key: string, value: string): void {
       <StatBadge label="筛选结果" :value="filtered.length" suffix="项" tone="info" icon="TrendCharts" size="small" />
     </div>
 
+    <ReconcilePanel :measures="rows" :orders="workOrderStore.orders" />
+
     <el-card shadow="never">
       <template #header>
         <div class="card-header">
-          <span class="card-header__title">复壮措施台账</span>
+          <span class="card-header__title">复壮措施台账（档案室）</span>
           <el-button type="primary" @click="openCreate" :disabled="treeStore.trees.length === 0">
             <el-icon><Plus /></el-icon>
             <span>新增复壮措施</span>
@@ -318,6 +330,28 @@ function handleFilterChange(key: string, value: string): void {
             <span v-else>{{ row.operator }}</span>
           </template>
         </el-table-column>
+        <el-table-column label="派工来源" width="130">
+          <template #default="{ row }">
+            <el-tag v-if="row.dispatchNo === ''" size="small" type="info" effect="plain">未派工</el-tag>
+            <el-tooltip
+              v-else-if="row.dispatchNo === LEGACY_NO_DISPATCH"
+              content="旧数据升级时认不出负责人班组归属，标成历史无派工"
+              placement="top"
+            >
+              <el-tag size="small" type="danger" effect="plain">{{ LEGACY_NO_DISPATCH }}</el-tag>
+            </el-tooltip>
+            <el-tag v-else size="small" type="success" effect="plain">{{ row.dispatchNo }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="完工回执" width="110">
+          <template #default="{ row }">
+            <el-tag v-if="row.state === '已完成'" size="small" type="success" effect="plain">已闭环</el-tag>
+            <el-tag v-else-if="hasReceipt(row)" size="small" type="warning" effect="dark">回执已交</el-tag>
+            <el-tooltip v-else content="班组交完工回执后，档案室才能动措施状态" placement="top">
+              <el-tag size="small" type="info" effect="plain">未交回执</el-tag>
+            </el-tooltip>
+          </template>
+        </el-table-column>
         <el-table-column label="实施状态" width="120">
           <template #default="{ row }">
             <el-tag
@@ -354,9 +388,23 @@ function handleFilterChange(key: string, value: string): void {
         </el-table-column>
         <el-table-column label="操作" width="230" fixed="right">
           <template #default="{ row }">
-            <el-button link type="primary" size="small" :disabled="row.state === '已完成'" @click="handleAdvance(row)">
-              推进状态
-            </el-button>
+            <el-tooltip
+              :disabled="row.state !== '实施中' || hasReceipt(row)"
+              content="班组未交完工回执，不能动措施状态"
+              placement="top"
+            >
+              <span>
+                <el-button
+                  link
+                  type="primary"
+                  size="small"
+                  :disabled="row.state === '已完成' || (row.state === '实施中' && !hasReceipt(row))"
+                  @click="handleAdvance(row)"
+                >
+                  推进状态
+                </el-button>
+              </span>
+            </el-tooltip>
             <el-button link type="primary" size="small" @click="openEdit(row)">编辑</el-button>
             <el-button link type="danger" size="small" @click="handleDelete(row)">删除</el-button>
           </template>
@@ -411,7 +459,7 @@ function handleFilterChange(key: string, value: string): void {
           type="info"
           show-icon
           :closable="false"
-          title="状态选择「已完成」时，会自动把该古树的最近复壮日期回写为上面的实施日期，并进入复评待办。"
+          title="班组交完工回执后才能把状态动为「已完成」；完成时自动回写古树最近复壮日期，并把对应回执归档。"
         />
       </el-form>
       <template #footer>

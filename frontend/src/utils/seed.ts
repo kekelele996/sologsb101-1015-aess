@@ -1,6 +1,6 @@
 /**
  * 演示数据播种（幂等）
- * 父 → 子 → 孙三层链路：古树 → 树体检查 / 复壮措施 / 加固件 / 长势复评
+ * 父 → 子 → 孙三层链路：古树 → 树体检查 / 复壮措施 / 班组作业单 / 加固件 / 长势复评
  * 所有 id 固定，保证 /trees/:id/surveys 深链一定命中真实数据。
  */
 import { db, ROW_REVISION } from './db'
@@ -9,6 +9,7 @@ import type { Survey } from '../types/survey'
 import type { Measure } from '../types/measure'
 import type { Support } from '../types/support'
 import type { Review } from '../types/review'
+import { legacyDispatchOf, type WorkOrder } from '../types/workorder'
 
 const SEED_TIME = '2026-01-08T01:30:00.000Z'
 
@@ -80,16 +81,30 @@ export async function seedDatabase(): Promise<void> {
     wrap<Survey>({ id: 'survey-c3', treeId: SEED_IDS.treeC, date: '2026-07-20', heightM: 9.7, dbhCm: 63.4, crownM: 6.9, leanDeg: 12.8, hollowCount: 5, siteNote: '铺装' }),
   ]
 
-  // ---------------- 复壮措施（每棵 2–3 条，覆盖三种状态） ----------------
+  // ---------------- 复壮措施（档案室台账；旧数据按负责人班组归属补派工来源） ----------------
   const measures: Measure[] = [
-    wrap<Measure>({ id: 'measure-a1', treeId: SEED_IDS.treeA, type: '换土', date: '2024-04-10', material: '基质土 6 m³ + 草炭土 2 m³', operator: '王建军', state: '已完成' }),
-    wrap<Measure>({ id: 'measure-a2', treeId: SEED_IDS.treeA, type: '树洞修补', date: '2025-09-12', material: '防腐树脂 + 木栓填充', operator: '李慧', state: '已完成' }),
-    wrap<Measure>({ id: 'measure-a3', treeId: SEED_IDS.treeA, type: '透气', date: '2026-03-20', material: '透气砖 12 块 + 通气管 4 根', operator: '张勇', state: '实施中' }),
-    wrap<Measure>({ id: 'measure-b1', treeId: SEED_IDS.treeB, type: '换土', date: '2024-04-15', material: '腐叶土 5 m³ + 河沙 1 m³', operator: '赵鹏', state: '已完成' }),
-    wrap<Measure>({ id: 'measure-b2', treeId: SEED_IDS.treeB, type: '施肥', date: '2026-03-28', material: '有机肥 80 kg + 复合肥 15 kg', operator: '赵鹏', state: '已完成' }),
-    wrap<Measure>({ id: 'measure-b3', treeId: SEED_IDS.treeB, type: '透气', date: '2026-06-10', material: '通气管 6 根', operator: '孙晓', state: '计划' }),
-    wrap<Measure>({ id: 'measure-c1', treeId: SEED_IDS.treeC, type: '树洞修补', date: '2026-04-11', material: '不锈钢网 + 防腐树脂', operator: '周敏', state: '已完成' }),
-    wrap<Measure>({ id: 'measure-c2', treeId: SEED_IDS.treeC, type: '病虫害防治', date: '2026-05-06', material: '生物制剂 2 次施药', operator: '周敏', state: '计划' }),
+    wrap<Measure>({ id: 'measure-a1', treeId: SEED_IDS.treeA, type: '换土', date: '2024-04-10', material: '基质土 6 m³ + 草炭土 2 m³', operator: '王建军', state: '已完成', dispatchNo: legacyDispatchOf('王建军') }),
+    wrap<Measure>({ id: 'measure-a2', treeId: SEED_IDS.treeA, type: '树洞修补', date: '2025-09-12', material: '防腐树脂 + 木栓填充', operator: '李慧', state: '已完成', dispatchNo: legacyDispatchOf('李慧') }),
+    wrap<Measure>({ id: 'measure-a3', treeId: SEED_IDS.treeA, type: '透气', date: '2026-03-20', material: '透气砖 12 块 + 通气管 4 根', operator: '张勇', state: '实施中', dispatchNo: legacyDispatchOf('张勇') }),
+    wrap<Measure>({ id: 'measure-b1', treeId: SEED_IDS.treeB, type: '换土', date: '2024-04-15', material: '腐叶土 5 m³ + 河沙 1 m³', operator: '赵鹏', state: '已完成', dispatchNo: legacyDispatchOf('赵鹏') }),
+    wrap<Measure>({ id: 'measure-b2', treeId: SEED_IDS.treeB, type: '施肥', date: '2026-03-28', material: '有机肥 80 kg + 复合肥 15 kg', operator: '赵鹏', state: '已完成', dispatchNo: legacyDispatchOf('赵鹏') }),
+    wrap<Measure>({ id: 'measure-b3', treeId: SEED_IDS.treeB, type: '透气', date: '2026-06-10', material: '通气管 6 根', operator: '孙晓', state: '计划', dispatchNo: legacyDispatchOf('孙晓') }),
+    wrap<Measure>({ id: 'measure-c1', treeId: SEED_IDS.treeC, type: '树洞修补', date: '2026-04-11', material: '不锈钢网 + 防腐树脂', operator: '周敏', state: '已完成', dispatchNo: legacyDispatchOf('周敏') }),
+    wrap<Measure>({ id: 'measure-c2', treeId: SEED_IDS.treeC, type: '病虫害防治', date: '2026-05-06', material: '生物制剂 2 次施药', operator: '周敏', state: '计划', dispatchNo: legacyDispatchOf('周敏') }),
+    // 名册外的负责人：升级补来源时认不出班组归属，标成「历史无派工」
+    wrap<Measure>({ id: 'measure-c0', treeId: SEED_IDS.treeC, type: '透气', date: '2023-10-15', material: '通气管 3 根', operator: '刘长顺', state: '已完成', dispatchNo: legacyDispatchOf('刘长顺') }),
+  ]
+
+  // ---------------- 班组作业单（养护班组台账，覆盖回执四种状态） ----------------
+  const workorders: WorkOrder[] = [
+    // 已交回执：材料与档案室登记一致，等档案室动 measure-a3 的措施状态
+    wrap<WorkOrder>({ id: 'order-a1', treeId: SEED_IDS.treeA, type: '透气', dispatchNo: 'PG-2026-0031', crew: '养护一班', crewCount: 4, materialUsed: '透气砖 12 块 + 通气管 4 根', workDate: '2026-03-20', state: '已交回执', receiptAt: '2026-03-21T02:10:00.000Z', returnReason: '' }),
+    // 作业中：对应 measure-b3（计划），尚未完工
+    wrap<WorkOrder>({ id: 'order-b1', treeId: SEED_IDS.treeB, type: '透气', dispatchNo: 'PG-2026-0058', crew: '养护三班', crewCount: 3, materialUsed: '通气管 6 根', workDate: '2026-06-10', state: '作业中', receiptAt: '', returnReason: '' }),
+    // 回执退回：领用材料与档案室登记（生物制剂 2 次施药）对不上，待班组重填再交
+    wrap<WorkOrder>({ id: 'order-c1', treeId: SEED_IDS.treeC, type: '病虫害防治', dispatchNo: 'PG-2026-0064', crew: '养护三班', crewCount: 2, materialUsed: '生物制剂 3 次施药', workDate: '2026-05-06', state: '回执退回', receiptAt: '', returnReason: '领用材料用量与档案室登记对不上（档案室登记：生物制剂 2 次施药），以档案室登记为准，请重填后再交' }),
+    // 已归档：档案室先完成 measure-a2，晚到回执仅登记归档，措施状态不回退
+    wrap<WorkOrder>({ id: 'order-a2', treeId: SEED_IDS.treeA, type: '树洞修补', dispatchNo: 'PG-2025-0117', crew: '养护二班', crewCount: 3, materialUsed: '防腐树脂 + 木栓填充', workDate: '2025-09-12', state: '已归档', receiptAt: '2025-09-14T08:40:00.000Z', returnReason: '' }),
   ]
 
   // ---------------- 加固件（含超周期未检查的样本） ----------------
@@ -112,11 +127,12 @@ export async function seedDatabase(): Promise<void> {
     wrap<Review>({ id: 'review-c3', treeId: SEED_IDS.treeC, date: '2026-07-20', vigor: '衰弱', trend: '好转', conclusion: '排水改造后积水缓解，新梢萌发量回升。', followUp: '继续按季度监测倾斜度与空洞变化，年度复壮计划中保留透气措施。' }),
   ]
 
-  await db.transaction('rw', db.trees, db.surveys, db.measures, db.supports, db.reviews, async () => {
+  await db.transaction('rw', [db.trees, db.surveys, db.measures, db.supports, db.reviews, db.workorders], async () => {
     await db.trees.bulkPut(trees)
     await db.surveys.bulkPut(surveys)
     await db.measures.bulkPut(measures)
     await db.supports.bulkPut(supports)
     await db.reviews.bulkPut(reviews)
+    await db.workorders.bulkPut(workorders)
   })
 }

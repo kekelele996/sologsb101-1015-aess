@@ -20,12 +20,17 @@ export interface Measure {
   type: MeasureType
   /** 实施日期 YYYY-MM-DD */
   date: string
-  /** 材料 */
+  /** 材料（档案室登记为准，班组回执对不上时以此为准） */
   material: string
   /** 负责人 */
   operator: string
   /** 实施状态 */
   state: MeasureState
+  /**
+   * 派工来源（档案室不填派工号，新建为 ''）；
+   * 旧数据升级时按负责人班组归属补来源，认不出归属的标成「历史无派工」。
+   */
+  dispatchNo: string
   createdAt: string
   updatedAt: string
   revision: number
